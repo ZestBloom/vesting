@@ -3,12 +3,11 @@
 // -----------------------------------------------
 // Name: Vesting
 // Description: Vesting Reach App
-// Version: 0.0.4 - add standard reward
+// Version: 0.0.5 - add terrain
 // Requires Reach v0.1.11 (27cb9643) or greater
 // Contributor(s):
 // - Nicholas Shellabarger
-// * To see full list of contributors see revision
-//   history
+// * To see full list of contributors see history
 // ----------------------------------------------
 
 const SERIAL_VER = 0; // serial version is reserved to create identical contracts under a separate plan id
@@ -28,7 +27,11 @@ const managerInteract = {
       recipientAddr: Address, // address of the recipient
       relayFee: UInt, // relay fee provided by manager greater than or equal to minimum relay fee
       withdrawFee: UInt, // withdraw fee provided by the manager greater than or equal to minimum withdraw fee
-    }) 
+      cliffTime: UInt, // cliff network seconds
+      vestTime: UInt, // vesting network seconds
+      vestMultiplierD: UInt, // vesting multiplier (deligate)
+      vestMultiplierA: UInt, // vesting multiplier (anybody)
+    })
   ),
   signal: Fun([], Null),
 };
@@ -56,13 +59,16 @@ export const Participants = () => [
  * who: address of the recipient
  * withdraws: number of withdraws
  */
+
+const Triple = X => Tuple(X, X, X);
 const State = Tuple(
   /*maanger*/ Address,
   /*token*/ Token,
   /*tokenAmount*/ UInt,
   /*closed*/ Bool,
   /*who*/ Address,
-  /*withdraws*/ UInt
+  /*withdraws*/ UInt,
+  /*terrain*/ Triple(UInt)
 );
 
 /*
@@ -90,8 +96,10 @@ export const Views = () => [
  */
 export const Api = () => [
   API({
+    touch: Fun([], Null),
     cancel: Fun([], Null),
     withdraw: Fun([], Null),
+    closeout: Fun([], Null),
   }),
 ];
 
@@ -116,10 +124,23 @@ export const App = (map) => {
       recipientAddr,
       relayFee,
       withdrawFee,
+      cliffTime,
+      vestTime,
+      vestMultiplierD,
+      vestMultiplierA,
     } = declassify(interact.getParams());
   });
   // Step
-  Manager.publish(tokenAmount, recipientAddr, relayFee, withdrawFee) 
+  Manager.publish(
+    tokenAmount,
+    recipientAddr,
+    relayFee,
+    withdrawFee,
+    cliffTime,
+    vestTime,
+    vestMultiplierD,
+    vestMultiplierA
+  )
     .check(() => {
       check(tokenAmount > 0, "tokenAmount must be greater than 0");
       check(
@@ -129,6 +150,16 @@ export const App = (map) => {
       check(
         withdrawFee >= FEE_MIN_WITHDRAW + REWARD_STANDARD_UNIT,
         "withdrawFee must be greater than or equal to mnimum withdraw fee"
+      );
+      check(cliffTime > 0, "cliffTime must be greater than 0");
+      check(vestTime > 0, "vestTime must be greater than 0");
+      check(
+        vestMultiplierD >= 2,
+        "vestMultiplierD must be greater than or equal to 2"
+      );
+      check(
+        vestMultiplierA >= 2 * vestMultiplierD,
+        "vestMultiplierA must be greater than or equal to 2 * vestMultiplierD"
       );
     })
     .pay([
@@ -146,6 +177,16 @@ export const App = (map) => {
   // Vesting Contract Main Step
   // ---------------------------------------------
 
+  const terrain = [
+    cliffTime,
+    cliffTime + vestTime * vestMultiplierD,
+    cliffTime + vestTime * vestMultiplierA
+  ];
+
+  const TERRAIN_CLIFF0 = 0;
+  const TERRAIN_CLIFF1 = 1;
+  const TERRAIN_CLIFF2 = 2;
+
   const initialState = [
     /*manger*/ Manager,
     /*token*/ token,
@@ -153,6 +194,7 @@ export const App = (map) => {
     /*closed*/ false,
     /*who*/ recipientAddr,
     /*withdraws*/ COUNT_FUNDED_WITHDRAWS,
+    /*terrain*/ terrain
   ];
 
   const [state] = parallelReduce([initialState])
@@ -182,8 +224,18 @@ export const App = (map) => {
       "balance accurate after closed"
     )
     .while(!state[STATE_CLOSED])
+    // api: touch (reserved, not yet implemented)
+    .api_(a.touch, () => {
+      return [
+        (k) => {
+          k(null);
+          return [state];
+        },
+      ];
+    })
     // api: withdraw
     .api_(a.withdraw, () => {
+      check(lastConsensusTime() >= terrain[TERRAIN_CLIFF0], "cliffTime not reached");
       check(
         state[STATE_TOKEN_AMOUNT] > 0,
         "tokenAmount must be greater than 0"
@@ -192,6 +244,7 @@ export const App = (map) => {
       return [
         (k) => {
           k(null);
+
           transfer([[1, token]]).to(recipientAddr);
           transfer(withdrawFee).to(this);
           return [
@@ -205,6 +258,18 @@ export const App = (map) => {
               state[STATE_WITHDRAWS] - 1
             ),
           ];
+        },
+      ];
+    })
+    /*
+     * api: closeout (not yet implemented)
+     */
+    .api_(a.closeout, () => {
+      check(lastConsensusTime() >= terrain[TERRAIN_CLIFF0], "cliffTime not reached");
+      return [
+        (k) => {
+          k(null);
+          return [state];
         },
       ];
     })
@@ -224,7 +289,18 @@ export const App = (map) => {
         },
       ];
     })
-    .timeout(false); 
+    .timeout(absoluteTime(terrain[TERRAIN_CLIFF1]), () => {
+      // Step
+      Relay.publish().timeout(
+        absoluteTime(terrain[TERRAIN_CLIFF2]),
+        () => {
+          // Step
+          Relay.publish();
+          return [state]; // ? what if state is not set to closed
+        }
+      );
+      return [state]; // ? what if state is not set to closed
+    });
   commit();
 
   // ---------------------------------------------
