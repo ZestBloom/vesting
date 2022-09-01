@@ -3,7 +3,7 @@
 // -----------------------------------------------
 // Name: Vesting
 // Description: Vesting Reach App
-// Version: 0.0.3 - add widthdraw base
+// Version: 0.0.4 - add standard reward
 // Requires Reach v0.1.11 (27cb9643) or greater
 // Contributor(s):
 // - Nicholas Shellabarger
@@ -13,8 +13,10 @@
 
 const SERIAL_VER = 0; // serial version is reserved to create identical contracts under a separate plan id
 
-const FEE_MIN_RELAY = 0; 
-const FEE_MIN_WITHDRAW = 0; 
+const REWARD_STANDARD_UNIT = 1000; // standard reward amount
+
+const FEE_MIN_RELAY = 0; // minimum relay fee
+const FEE_MIN_WITHDRAW = 0; // minimum withdraw fee
 
 const COUNT_FUNDED_WITHDRAWS = 1000; // REM placeholder for maximum number of withdraws to be funded
 
@@ -121,11 +123,11 @@ export const App = (map) => {
     .check(() => {
       check(tokenAmount > 0, "tokenAmount must be greater than 0");
       check(
-        relayFee >= FEE_MIN_RELAY,
+        relayFee >= FEE_MIN_RELAY + REWARD_STANDARD_UNIT,
         "relayFee must be greater than or equal to mnimum relay fee"
       );
       check(
-        withdrawFee >= FEE_MIN_WITHDRAW,
+        withdrawFee >= FEE_MIN_WITHDRAW + REWARD_STANDARD_UNIT,
         "withdrawFee must be greater than or equal to mnimum withdraw fee"
       );
     })
