@@ -3,7 +3,7 @@
 // -----------------------------------------------
 // Name: Vesting
 // Description: Vesting Reach App
-// Version: 0.0.5 - add terrain
+// Version: 0.0.6 - add toggle
 // Requires Reach v0.1.11 (27cb9643) or greater
 // Contributor(s):
 // - Nicholas Shellabarger
@@ -31,6 +31,7 @@ const managerInteract = {
       vestTime: UInt, // vesting network seconds
       vestMultiplierD: UInt, // vesting multiplier (deligate)
       vestMultiplierA: UInt, // vesting multiplier (anybody)
+      defaultFrozen: Bool, // default frozen
     })
   ),
   signal: Fun([], Null),
@@ -60,7 +61,7 @@ export const Participants = () => [
  * withdraws: number of withdraws
  */
 
-const Triple = X => Tuple(X, X, X);
+const Triple = (X) => Tuple(X, X, X);
 const State = Tuple(
   /*maanger*/ Address,
   /*token*/ Token,
@@ -68,7 +69,8 @@ const State = Tuple(
   /*closed*/ Bool,
   /*who*/ Address,
   /*withdraws*/ UInt,
-  /*terrain*/ Triple(UInt)
+  /*terrain*/ Triple(UInt),
+  /*frozen*/ Bool
 );
 
 /*
@@ -77,6 +79,7 @@ const State = Tuple(
 const STATE_TOKEN_AMOUNT = 2;
 const STATE_CLOSED = 3;
 const STATE_WITHDRAWS = 5;
+const STATE_FROZEN = 7;
 
 /*
  * Vesting Contract Views
@@ -97,6 +100,7 @@ export const Views = () => [
 export const Api = () => [
   API({
     touch: Fun([], Null),
+    toggle: Fun([], Null),
     cancel: Fun([], Null),
     withdraw: Fun([], Null),
     closeout: Fun([], Null),
@@ -128,6 +132,7 @@ export const App = (map) => {
       vestTime,
       vestMultiplierD,
       vestMultiplierA,
+      defaultFrozen,
     } = declassify(interact.getParams());
   });
   // Step
@@ -139,7 +144,8 @@ export const App = (map) => {
     cliffTime,
     vestTime,
     vestMultiplierD,
-    vestMultiplierA
+    vestMultiplierA,
+    defaultFrozen
   )
     .check(() => {
       check(tokenAmount > 0, "tokenAmount must be greater than 0");
@@ -180,7 +186,7 @@ export const App = (map) => {
   const terrain = [
     cliffTime,
     cliffTime + vestTime * vestMultiplierD,
-    cliffTime + vestTime * vestMultiplierA
+    cliffTime + vestTime * vestMultiplierA,
   ];
 
   const TERRAIN_CLIFF0 = 0;
@@ -194,7 +200,8 @@ export const App = (map) => {
     /*closed*/ false,
     /*who*/ recipientAddr,
     /*withdraws*/ COUNT_FUNDED_WITHDRAWS,
-    /*terrain*/ terrain
+    /*terrain*/ terrain,
+    /*frozen*/ defaultFrozen,
   ];
 
   const [state] = parallelReduce([initialState])
@@ -233,9 +240,22 @@ export const App = (map) => {
         },
       ];
     })
+    // api: toggle
+    .api_(a.toggle, () => {
+      check(this == Manager, "only manager can toggle");
+      return [
+        (k) => {
+          k(null);
+          return [Tuple.set(state, STATE_FROZEN, !state[STATE_FROZEN])];
+        },
+      ];
+    })
     // api: withdraw
     .api_(a.withdraw, () => {
-      check(lastConsensusTime() >= terrain[TERRAIN_CLIFF0], "cliffTime not reached");
+      check(
+        lastConsensusTime() >= terrain[TERRAIN_CLIFF0],
+        "cliffTime not reached"
+      );
       check(
         state[STATE_TOKEN_AMOUNT] > 0,
         "tokenAmount must be greater than 0"
@@ -265,7 +285,10 @@ export const App = (map) => {
      * api: closeout (not yet implemented)
      */
     .api_(a.closeout, () => {
-      check(lastConsensusTime() >= terrain[TERRAIN_CLIFF0], "cliffTime not reached");
+      check(
+        lastConsensusTime() >= terrain[TERRAIN_CLIFF0],
+        "cliffTime not reached"
+      );
       return [
         (k) => {
           k(null);
@@ -275,7 +298,7 @@ export const App = (map) => {
     })
     // api: cancel
     .api_(a.cancel, () => {
-      check(this === Manager);
+      check(this == Manager, "only manager can cancel"); 
       return [
         (k) => {
           k(null);
@@ -291,14 +314,11 @@ export const App = (map) => {
     })
     .timeout(absoluteTime(terrain[TERRAIN_CLIFF1]), () => {
       // Step
-      Relay.publish().timeout(
-        absoluteTime(terrain[TERRAIN_CLIFF2]),
-        () => {
-          // Step
-          Relay.publish();
-          return [state]; // ? what if state is not set to closed
-        }
-      );
+      Relay.publish().timeout(absoluteTime(terrain[TERRAIN_CLIFF2]), () => {
+        // Step
+        Relay.publish();
+        return [state]; // ? what if state is not set to closed
+      });
       return [state]; // ? what if state is not set to closed
     });
   commit();
