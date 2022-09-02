@@ -3,12 +3,14 @@
 // -----------------------------------------------
 // Name: Vesting
 // Description: Vesting Reach App
-// Version: 0.0.6 - add toggle
+// Version: 0.0.7 - add deligate
 // Requires Reach v0.1.11 (27cb9643) or greater
 // Contributor(s):
 // - Nicholas Shellabarger
 // * To see full list of contributors see history
 // ----------------------------------------------
+
+const Triple = (X) => Tuple(X, X, X);
 
 const SERIAL_VER = 0; // serial version is reserved to create identical contracts under a separate plan id
 
@@ -25,6 +27,7 @@ const managerInteract = {
     Object({
       tokenAmount: UInt, // amount of tokens to vest
       recipientAddr: Address, // address of the recipient
+      deligateAddr: Address, // address of the deligate
       relayFee: UInt, // relay fee provided by manager greater than or equal to minimum relay fee
       withdrawFee: UInt, // withdraw fee provided by the manager greater than or equal to minimum withdraw fee
       cliffTime: UInt, // cliff network seconds
@@ -61,7 +64,6 @@ export const Participants = () => [
  * withdraws: number of withdraws
  */
 
-const Triple = (X) => Tuple(X, X, X);
 const State = Tuple(
   /*maanger*/ Address,
   /*token*/ Token,
@@ -126,6 +128,7 @@ export const App = (map) => {
     const {
       tokenAmount,
       recipientAddr,
+      deligateAddr,
       relayFee,
       withdrawFee,
       cliffTime,
@@ -139,6 +142,7 @@ export const App = (map) => {
   Manager.publish(
     tokenAmount,
     recipientAddr,
+    deligateAddr,
     relayFee,
     withdrawFee,
     cliffTime,
@@ -298,7 +302,7 @@ export const App = (map) => {
     })
     // api: cancel
     .api_(a.cancel, () => {
-      check(this == Manager, "only manager can cancel"); 
+      check(this == Manager, "only manager can cancel");
       return [
         (k) => {
           k(null);
@@ -314,12 +318,32 @@ export const App = (map) => {
     })
     .timeout(absoluteTime(terrain[TERRAIN_CLIFF1]), () => {
       // Step
-      Relay.publish().timeout(absoluteTime(terrain[TERRAIN_CLIFF2]), () => {
-        // Step
-        Relay.publish();
-        return [state]; // ? what if state is not set to closed
-      });
-      return [state]; // ? what if state is not set to closed
+      Relay.publish()
+        .check(() => {
+          check(this == deligateAddr, "only deligate can relay");
+        })
+        .timeout(absoluteTime(terrain[TERRAIN_CLIFF2]), () => {
+          // Step
+          Relay.publish();
+          transfer([
+            withdrawFee * state[STATE_WITHDRAWS],
+            [state[STATE_TOKEN_AMOUNT], token],
+          ]).to(this);
+          return [
+            Tuple.set(
+              Tuple.set(state, STATE_CLOSED, true),
+              STATE_TOKEN_AMOUNT,
+              0
+            ),
+          ];
+        });
+      transfer([
+        withdrawFee * state[STATE_WITHDRAWS],
+        [state[STATE_TOKEN_AMOUNT], token],
+      ]).to(this);
+      return [
+        Tuple.set(Tuple.set(state, STATE_CLOSED, true), STATE_TOKEN_AMOUNT, 0),
+      ];
     });
   commit();
 
